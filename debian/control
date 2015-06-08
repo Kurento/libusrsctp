@@ -1,0 +1,18 @@
+Source: libusrsctp
+Section: utils
+Priority: optional
+Maintainer: Kurento Maintenance Team <kurento@googlegroups.com>
+Build-Depends: debhelper (>= 8.0.0),
+ autoconf,
+ libtool,
+Standards-Version: 3.9.4
+
+Package: libusrsctp
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},
+Description: sctp-refimpl library
+
+Package: libusrsctp-dev
+Architecture: any
+Depends: libusrsctp (= ${binary:Version}),
+Description: sctp-refimpl development files
