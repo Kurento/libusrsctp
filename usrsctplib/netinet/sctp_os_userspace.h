@@ -103,7 +103,7 @@ typedef HANDLE userland_thread_t;
 #define n_time     unsigned __int32
 #define sa_family_t unsigned __int8
 #define ssize_t    __int64
-#define __func__	__FUNCTION__
+#define __func__	__func__
 
 #ifndef EWOULDBLOCK
 #define EWOULDBLOCK             WSAEWOULDBLOCK
@@ -1127,7 +1127,7 @@ sctp_get_mbuf_for_msg(unsigned int space_needed, int want_header, int how, int a
 #endif
 #define I_AM_HERE \
                 do { \
-			SCTP_PRINTF("%s:%d at %s\n", __FILE__, __LINE__ , __FUNCTION__); \
+			SCTP_PRINTF("%s:%d at %s\n", __FILE__, __LINE__ , __func__); \
 		} while (0)
 
 #ifndef timevalsub
