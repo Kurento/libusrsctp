@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_sysctl.c 283988 2015-06-04 12:46:56Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_sysctl.c 295541 2016-02-11 18:35:46Z tuexen $");
 #endif
 
 #include <netinet/sctp_os.h>
@@ -528,7 +528,15 @@ sctp_sysctl_handle_assoclist(SYSCTL_HANDLER_ARGS)
 			xinpcb.maxqlen = 0;
 		} else {
 			xinpcb.qlen = so->so_qlen;
+#if defined(__FreeBSD__) && __FreeBSD_version > 1100096
+			xinpcb.qlen_old = so->so_qlen > USHRT_MAX ?
+			    USHRT_MAX : (uint16_t) so->so_qlen;
+#endif
 			xinpcb.maxqlen = so->so_qlimit;
+#if defined(__FreeBSD__) && __FreeBSD_version > 1100096
+			xinpcb.maxqlen_old = so->so_qlimit > USHRT_MAX ?
+			    USHRT_MAX : (uint16_t) so->so_qlimit;
+#endif
 		}
 		SCTP_INP_INCR_REF(inp);
 		SCTP_INP_RUNLOCK(inp);
@@ -555,7 +563,7 @@ sctp_sysctl_handle_assoclist(SYSCTL_HANDLER_ARGS)
 			if (stcb->asoc.primary_destination != NULL)
 				xstcb.primary_addr = stcb->asoc.primary_destination->ro._l_addr;
 			xstcb.heartbeat_interval = stcb->asoc.heart_beat_delay;
-			xstcb.state = SCTP_GET_STATE(&stcb->asoc);	/* FIXME */
+			xstcb.state = (uint32_t)sctp_map_assoc_state(stcb->asoc.state);
 #if defined(__FreeBSD__)
 #if __FreeBSD_version >= 800000
 			/* 7.0 does not support these */
@@ -621,10 +629,12 @@ sctp_sysctl_handle_assoclist(SYSCTL_HANDLER_ARGS)
 #if __FreeBSD_version >= 800000
 				xraddr.rtt = net->rtt / 1000;
 				xraddr.heartbeat_interval = net->heart_beat_delay;
+				xraddr.ssthresh = net->ssthresh;
 #endif
 #else
 				xraddr.rtt = net->rtt / 1000;
 				xraddr.heartbeat_interval = net->heart_beat_delay;
+				xraddr.ssthresh = net->ssthresh;
 #endif
 				xraddr.start_time.tv_sec = (uint32_t)net->start_time.tv_sec;
 				xraddr.start_time.tv_usec = (uint32_t)net->start_time.tv_usec;

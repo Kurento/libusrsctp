@@ -1080,6 +1080,8 @@ int
 m_dup_pkthdr(struct mbuf *to, struct mbuf *from, int how)
 {
 
+	KASSERT(to, ("m_dup_pkthdr: to is NULL"));
+	KASSERT(from, ("m_dup_pkthdr: from is NULL"));
 	to->m_flags = (from->m_flags & M_COPYFLAGS) | (to->m_flags & M_EXT);
 	if ((to->m_flags & M_EXT) == 0)
 		to->m_data = to->m_pktdat;
@@ -1198,7 +1200,7 @@ m_prepend(struct mbuf *m, int len, int how)
 		M_MOVE_PKTHDR(mn, m);
 	mn->m_next = m;
 	m = mn;
-	if(m->m_flags & M_PKTHDR) {
+	if (m->m_flags & M_PKTHDR) {
 		if (len < MHLEN)
 			MH_ALIGN(m, len);
 	} else {

@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.h 279859 2015-03-10 19:49:25Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.h 295668 2016-02-16 19:36:25Z tuexen $");
 #endif
 
 #ifndef _NETINET_SCTP_PCB_H_
@@ -311,6 +311,7 @@ struct sctp_base_info {
 	userland_thread_t timer_thread;
 	uint8_t timer_thread_should_exit;
 #if !defined(__Userspace_os_Windows)
+	pthread_mutexattr_t mtx_attr;
 #if defined(INET) || defined(INET6)
 	int userspace_route;
 	userland_thread_t recvthreadroute;
@@ -564,6 +565,7 @@ struct sctp_inpcb {
 	uint32_t i_am_here_line;
 #endif
 	uint32_t def_vrf_id;
+	uint16_t fibnum;
 #ifdef SCTP_MVRF
 	uint32_t *m_vrf_ids;
 	uint32_t num_vrfs;
@@ -793,16 +795,16 @@ void sctp_inpcb_free(struct sctp_inpcb *, int, int);
 #if defined(__FreeBSD__) && __FreeBSD_version >= 500000
 struct sctp_tcb *
 sctp_aloc_assoc(struct sctp_inpcb *, struct sockaddr *,
-                int *, uint32_t, uint32_t, struct thread *);
+                int *, uint32_t, uint32_t, uint16_t, struct thread *);
 #elif defined(__Windows__)
 struct sctp_tcb *
 sctp_aloc_assoc(struct sctp_inpcb *, struct sockaddr *,
-                int *, uint32_t, uint32_t, PKTHREAD);
+                int *, uint32_t, uint32_t, uint16_t, PKTHREAD);
 #else
 /* proc will be NULL for __Userspace__ */
 struct sctp_tcb *
 sctp_aloc_assoc(struct sctp_inpcb *, struct sockaddr *,
-                int *, uint32_t, uint32_t, struct proc *);
+                int *, uint32_t, uint32_t, uint16_t, struct proc *);
 #endif
 
 int sctp_free_assoc(struct sctp_inpcb *, struct sctp_tcb *, int, int);
@@ -816,10 +818,6 @@ void
 sctp_add_vtag_to_timewait(uint32_t tag, uint32_t time, uint16_t lport, uint16_t rport);
 
 void sctp_add_local_addr_ep(struct sctp_inpcb *, struct sctp_ifa *, uint32_t);
-
-int sctp_insert_laddr(struct sctpladdr *, struct sctp_ifa *, uint32_t);
-
-void sctp_remove_laddr(struct sctp_laddr *);
 
 void sctp_del_local_addr_ep(struct sctp_inpcb *, struct sctp_ifa *);
 
@@ -870,11 +868,6 @@ sctp_initiate_iterator(inp_func inpf,
 void
 sctp_queue_to_mcore(struct mbuf *m, int off, int cpu_to_use);
 
-#endif
-
-#ifdef INVARIANTS
-void
-sctp_validate_no_locks(struct sctp_inpcb *inp);
 #endif
 
 #endif				/* _KERNEL */

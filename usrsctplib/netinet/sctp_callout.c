@@ -56,10 +56,19 @@
  * Callout/Timer routines for OS that doesn't have them
  */
 #if defined(__APPLE__) || defined(__Userspace__)
-int ticks = 0;
+static int ticks = 0;
 #else
 extern int ticks;
 #endif
+
+int sctp_get_tick_count(void) {
+	int ret;
+
+	SCTP_TIMERQ_LOCK();
+	ret = ticks;
+	SCTP_TIMERQ_UNLOCK();
+	return ret;
+}
 
 /*
  * SCTP_TIMERQ_LOCK protects:
@@ -178,6 +187,7 @@ sctp_timeout(void *arg SCTP_UNUSED)
 void *
 user_sctp_timer_iterate(void *arg)
 {
+	sctp_userspace_set_threadname("SCTP timer");
 	for (;;) {
 #if defined (__Userspace_os_Windows)
 		Sleep(TIMEOUT_INTERVAL);
@@ -203,18 +213,12 @@ sctp_start_timer(void)
 	 * No need to do SCTP_TIMERQ_LOCK_INIT();
 	 * here, it is being done in sctp_pcb_init()
 	 */
-#if defined (__Userspace_os_Windows)
-	if ((SCTP_BASE_VAR(timer_thread) = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)user_sctp_timer_iterate, NULL, 0, NULL)) == NULL) {
-		SCTP_PRINTF("ERROR; Creating ithread failed\n");
-	}
-#else
 	int rc;
 
-	rc = pthread_create(&SCTP_BASE_VAR(timer_thread), NULL, user_sctp_timer_iterate, NULL);
+	rc = sctp_userspace_thread_create(&SCTP_BASE_VAR(timer_thread), user_sctp_timer_iterate);
 	if (rc) {
-		SCTP_PRINTF("ERROR; return code from pthread_create() is %d\n", rc);
+		SCTP_PRINTF("ERROR; return code from sctp_thread_create() is %d\n", rc);
 	}
-#endif
 }
 
 #endif

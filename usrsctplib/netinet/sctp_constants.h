@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_constants.h 283650 2015-05-28 16:00:23Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_constants.h 295549 2016-02-11 22:29:39Z tuexen $");
 #endif
 
 #ifndef _NETINET_SCTP_CONSTANTS_H_
@@ -71,6 +71,8 @@ extern void getwintimeofday(struct timeval *tv);
  */
 #define SCTP_LARGEST_INIT_ACCEPTED (65535 - 2048)
 
+/* Largest length of a chunk */
+#define SCTP_MAX_CHUNK_LENGTH 0xffff
 /* Number of addresses where we just skip the counting */
 #define SCTP_COUNT_LIMIT 40
 
@@ -466,7 +468,7 @@ extern void getwintimeofday(struct timeval *tv);
 
 
 /*
- * SCTP states for internal state machine XXX (should match "user" values)
+ * SCTP states for internal state machine
  */
 #define SCTP_STATE_EMPTY		0x0000
 #define SCTP_STATE_INUSE		0x0001
@@ -627,10 +629,6 @@ extern void getwintimeofday(struct timeval *tv);
 
 /* 30 seconds + RTO (in ms) */
 #define SCTP_HB_DEFAULT_MSEC	30000
-
-/* Max time I will wait for Shutdown to complete */
-#define SCTP_DEF_MAX_SHUTDOWN_SEC 180
-
 
 /*
  * This is how long a secret lives, NOT how long a cookie lives how many
@@ -1005,10 +1003,7 @@ extern void getwintimeofday(struct timeval *tv);
      (((uint8_t *)&(a)->s_addr)[1] == 168)))
 
 #define IN4_ISLOOPBACK_ADDRESS(a) \
-    ((((uint8_t *)&(a)->s_addr)[0] == 127) && \
-     (((uint8_t *)&(a)->s_addr)[1] == 0) && \
-     (((uint8_t *)&(a)->s_addr)[2] == 0) && \
-     (((uint8_t *)&(a)->s_addr)[3] == 1))
+    (((uint8_t *)&(a)->s_addr)[0] == 127)
 
 #define IN4_ISLINKLOCAL_ADDRESS(a) \
     ((((uint8_t *)&(a)->s_addr)[0] == 169) && \

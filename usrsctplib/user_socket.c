@@ -42,6 +42,9 @@
 #ifdef INET6
 #include <netinet6/sctp6_var.h>
 #endif
+#if defined(__Userspace_os_FreeBSD)
+#include <sys/param.h>
+#endif
 #if defined(__Userspace_os_Linux)
 #define __FAVOR_BSD    /* (on Ubuntu at least) enables UDP header field names like BSD in RFC 768 */
 #endif
@@ -67,7 +70,8 @@ MALLOC_DEFINE(M_SONAME, "sctp_soname", "sctp soname");
 /* Prototypes */
 extern int sctp_sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
                        struct mbuf *top, struct mbuf *control, int flags,
-                     /* proc is a dummy in __Userspace__ and will not be passed to sctp_lower_sosend */                       struct proc *p);
+                       /* proc is a dummy in __Userspace__ and will not be passed to sctp_lower_sosend */
+                       struct proc *p);
 
 extern int sctp_attach(struct socket *so, int proto, uint32_t vrf_id);
 extern int sctpconn_attach(struct socket *so, int proto, uint32_t vrf_id);
@@ -77,6 +81,28 @@ usrsctp_init(uint16_t port,
              int (*conn_output)(void *addr, void *buffer, size_t length, uint8_t tos, uint8_t set_df),
              void (*debug_printf)(const char *format, ...))
 {
+#if defined(__Userspace_os_Windows)
+#if defined(INET) || defined(INET6)
+	WSADATA wsaData;
+
+	if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
+		SCTP_PRINTF("WSAStartup failed\n");
+		exit (-1);
+	}
+#endif
+	InitializeConditionVariable(&accept_cond);
+	InitializeCriticalSection(&accept_mtx);
+#else
+	pthread_mutexattr_t mutex_attr;
+
+	pthread_mutexattr_init(&mutex_attr);
+#ifdef INVARIANTS
+	pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_ERRORCHECK);
+#endif
+	pthread_mutex_init(&accept_mtx, &mutex_attr);
+	pthread_mutexattr_destroy(&mutex_attr);
+	pthread_cond_init(&accept_cond, NULL);
+#endif
 	sctp_init(port, conn_output, debug_printf);
 }
 
@@ -274,11 +300,9 @@ sofree(struct socket *so)
 
 
 /* Taken from  /src/sys/kern/uipc_socket.c */
-int
-soabort(so)
-	struct socket *so;
+void
+soabort(struct socket *so)
 {
-	int error;
 #if defined(INET6)
 	struct sctp_inpcb *inp;
 #endif
@@ -286,24 +310,18 @@ soabort(so)
 #if defined(INET6)
 	inp = (struct sctp_inpcb *)so->so_pcb;
 	if (inp->sctp_flags & SCTP_PCB_FLAGS_BOUND_V6) {
-		error = sctp6_abort(so);
+		sctp6_abort(so);
 	} else {
 #if defined(INET)
-		error = sctp_abort(so);
-#else
-		error = EAFNOSUPPORT;
+		sctp_abort(so);
 #endif
 	}
 #elif defined(INET)
-	error = sctp_abort(so);
-#else
-	error = EAFNOSUPPORT;
+	sctp_abort(so);
 #endif
-	if (error) {
-		sofree(so);
-		return error;
-	}
-	return (0);
+	ACCEPT_LOCK();
+	SOCK_LOCK(so);
+	sofree(so);
 }
 
 
@@ -509,7 +527,7 @@ sonewconn(struct socket *head, int connstatus)
 		/*
 		 * Keep removing sockets from the head until there's room for
 		 * us to insert on the tail.  In pre-locking revisions, this
-		 * was a simple if(), but as we could be racing with other
+		 * was a simple if (), but as we could be racing with other
 		 * threads and soabort() requires dropping locks, we must
 		 * loop waiting for the condition to be true.
 		 */
@@ -689,6 +707,52 @@ getsockaddr(namp, uaddr, len)
 	return (error);
 }
 
+int
+usrsctp_getsockopt(struct socket *so, int level, int option_name,
+                   void *option_value, socklen_t *option_len);
+
+sctp_assoc_t
+usrsctp_getassocid(struct socket *sock, struct sockaddr *sa)
+{
+	struct sctp_paddrinfo sp;
+	socklen_t siz;
+#ifndef HAVE_SA_LEN
+	size_t sa_len;
+#endif
+
+	/* First get the assoc id */
+	siz = sizeof(sp);
+	memset(&sp, 0, sizeof(sp));
+#ifdef HAVE_SA_LEN
+	memcpy((caddr_t)&sp.spinfo_address, sa, sa->sa_len);
+#else
+	switch (sa->sa_family) {
+#ifdef INET
+	case AF_INET:
+		sa_len = sizeof(struct sockaddr_in);
+		break;
+#endif
+#ifdef INET6
+	case AF_INET6:
+		sa_len = sizeof(struct sockaddr_in6);
+		break;
+#endif
+	case AF_CONN:
+		sa_len = sizeof(struct sockaddr_conn);
+		break;
+	default:
+		sa_len = 0;
+		break;
+	}
+	memcpy((caddr_t)&sp.spinfo_address, sa, sa_len);
+#endif
+	if (usrsctp_getsockopt(sock, IPPROTO_SCTP, SCTP_GET_PEER_ADDR_INFO, &sp, &siz) != 0) {
+		/* We depend on the fact that 0 can never be returned */
+		return ((sctp_assoc_t) 0);
+	}
+	return (sp.spinfo_assoc_id);
+}
+
 
 /* Taken from  /src/lib/libc/net/sctp_sys_calls.c
  * and modified for __Userspace__
@@ -720,13 +784,17 @@ userspace_sctp_sendmsg(struct socket *so,
 
 
 	/* Perform error checks on destination (to) */
-	if (tolen > SOCK_MAXADDRLEN){
+	if (tolen > SOCK_MAXADDRLEN) {
 		errno = ENAMETOOLONG;
 		return (-1);
 	}
 	if ((tolen > 0) &&
 	    ((to == NULL) || (tolen < (socklen_t)sizeof(struct sockaddr)))) {
 		errno = EINVAL;
+		return (-1);
+	}
+	if (data == NULL) {
+		errno = EFAULT;
 		return (-1);
 	}
 	/* Adding the following as part of defensive programming, in case the application
@@ -770,12 +838,18 @@ usrsctp_sendv(struct socket *so,
 	struct uio auio;
 	struct iovec iov[1];
 	int use_sinfo;
+	sctp_assoc_t *assoc_id;
 
 	if (so == NULL) {
 		errno = EBADF;
 		return (-1);
 	}
+	if (data == NULL) {
+		errno = EFAULT;
+		return (-1);
+	}
 	memset(&sinfo, 0, sizeof(struct sctp_sndrcvinfo));
+	assoc_id = NULL;
 	use_sinfo = 0;
 	switch (infotype) {
 	case SCTP_SENDV_NOINFO:
@@ -794,6 +868,7 @@ usrsctp_sendv(struct socket *so,
 		sinfo.sinfo_ppid = ((struct sctp_sndinfo *)info)->snd_ppid;
 		sinfo.sinfo_context = ((struct sctp_sndinfo *)info)->snd_context;
 		sinfo.sinfo_assoc_id = ((struct sctp_sndinfo *)info)->snd_assoc_id;
+		assoc_id = &(((struct sctp_sndinfo *)info)->snd_assoc_id);
 		use_sinfo = 1;
 		break;
 	case SCTP_SENDV_PRINFO:
@@ -820,6 +895,7 @@ usrsctp_sendv(struct socket *so,
 			sinfo.sinfo_ppid = ((struct sctp_sendv_spa *)info)->sendv_sndinfo.snd_ppid;
 			sinfo.sinfo_context = ((struct sctp_sendv_spa *)info)->sendv_sndinfo.snd_context;
 			sinfo.sinfo_assoc_id = ((struct sctp_sendv_spa *)info)->sendv_sndinfo.snd_assoc_id;
+			assoc_id = &(((struct sctp_sendv_spa *)info)->sendv_sndinfo.snd_assoc_id);
 		} else {
 			sinfo.sinfo_flags = 0;
 			sinfo.sinfo_stream = 0;
@@ -856,6 +932,9 @@ usrsctp_sendv(struct socket *so,
 	auio.uio_resid = len;
 	errno = sctp_lower_sosend(so, to, &auio, NULL, NULL, flags, use_sinfo ? &sinfo : NULL);
 	if (errno == 0) {
+		if ((to != NULL) && (assoc_id != NULL)) {
+			*assoc_id = usrsctp_getassocid(so, to);
+		}
 		return (len - auio.uio_resid);
 	} else {
 		return (-1);
@@ -912,7 +991,7 @@ sendmsg_return:
     /* TODO: Needs a condition for non-blocking when error is EWOULDBLOCK */
     if (0 == error)
         retvalsendmsg = len;
-    else if(error == EWOULDBLOCK) {
+    else if (error == EWOULDBLOCK) {
         errno = EWOULDBLOCK;
         retvalsendmsg = (-1);
     } else {
@@ -1336,7 +1415,7 @@ usrsctp_socket(int domain, int type, int protocol,
 {
 	struct socket *so;
 
-	if ((protocol = IPPROTO_SCTP) && (SCTP_BASE_VAR(sctp_pcb_initialized) == 0)) {
+	if ((protocol == IPPROTO_SCTP) && (SCTP_BASE_VAR(sctp_pcb_initialized) == 0)) {
 		errno = EPROTONOSUPPORT;
 		return (NULL);
 	}
@@ -1851,7 +1930,7 @@ accept1(struct socket *so, struct sockaddr *aname, socklen_t *anamelen, struct s
 struct socket *
 usrsctp_accept(struct socket *so, struct sockaddr *aname, socklen_t *anamelen)
 {
-	struct socket *accept_return_sock;
+	struct socket *accept_return_sock = NULL;
 
 	errno = accept1(so, aname, anamelen, &accept_return_sock);
 	if (errno) {
@@ -2153,6 +2232,16 @@ usrsctp_finish(void)
 		return (-1);
 	}
 	sctp_finish();
+#if defined(__Userspace_os_Windows)
+	DeleteConditionVariable(&accept_cond);
+	DeleteCriticalSection(&accept_mtx);
+#if defined(INET) || defined(INET6)
+	WSACleanup();
+#endif
+#else
+	pthread_cond_destroy(&accept_cond);
+	pthread_mutex_destroy(&accept_mtx);
+#endif
 	return (0);
 }
 
@@ -2460,6 +2549,24 @@ usrsctp_bindx(struct socket *so, struct sockaddr *addrs, int addrcnt, int flags)
 		gaddrs->sget_assoc_id = 0;
 #ifdef HAVE_SA_LEN
 		memcpy(gaddrs->addr, sa, sa->sa_len);
+#if defined(INET) || defined(INET6)
+		if ((i == 0) && (sport != 0)) {
+			switch (gaddrs->addr->sa_family) {
+#ifdef INET
+			case AF_INET:
+				sin = (struct sockaddr_in *)gaddrs->addr;
+				sin->sin_port = sport;
+				break;
+#endif
+#ifdef INET6
+			case AF_INET6:
+				sin6 = (struct sockaddr_in6 *)gaddrs->addr;
+				sin6->sin6_port = sport;
+				break;
+#endif
+			}
+		}
+#endif
 		if (usrsctp_setsockopt(so, IPPROTO_SCTP, flags, gaddrs, (socklen_t)argsz) != 0) {
 			free(gaddrs);
 			return (-1);
@@ -2833,7 +2940,7 @@ sctp_userspace_ip_output(int *result, struct mbuf *o_pak,
 			SCTP_PRINTF("Why did the SCTP implementation did not choose a source address?\n");
 		}
 		/* TODO need to worry about ro->ro_dst as in ip_output? */
-#if defined(__Userspace_os_Linux) || defined (__Userspace_os_Windows)
+#if defined(__Userspace_os_Linux) || defined (__Userspace_os_Windows) || (defined(__Userspace_os_FreeBSD) && (__FreeBSD_version >= 1100030))
 		/* need to put certain fields into network order for Linux */
 		ip->ip_len = htons(ip->ip_len);
 		ip->ip_off = 0;
@@ -3130,7 +3237,7 @@ usrsctp_deregister_address(void *addr)
 #define TRAILER "# SCTP_PACKET\n"
 
 char *
-usrsctp_dumppacket(void *buf, size_t len, int outbound)
+usrsctp_dumppacket(const void *buf, size_t len, int outbound)
 {
 	size_t i, pos;
 	char *dump_buf, *packet;

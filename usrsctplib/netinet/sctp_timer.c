@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_timer.c 283650 2015-05-28 16:00:23Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_timer.c 295709 2016-02-17 18:04:22Z tuexen $");
 #endif
 
 #define _IP_VHL
@@ -95,7 +95,7 @@ sctp_audit_retranmission_queue(struct sctp_association *asoc)
 		asoc->sent_queue_cnt);
 }
 
-int
+static int
 sctp_threshold_management(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
     struct sctp_nets *net, uint16_t threshold)
 {
@@ -121,9 +121,9 @@ sctp_threshold_management(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 				net->last_active = sctp_get_tick_count();
 				sctp_send_hb(stcb, net, SCTP_SO_NOT_LOCKED);
 				sctp_timer_stop(SCTP_TIMER_TYPE_HEARTBEAT,
-				                stcb->sctp_ep, stcb, net,
+				                inp, stcb, net,
 				                SCTP_FROM_SCTP_TIMER + SCTP_LOC_1);
-				sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, stcb->sctp_ep, stcb, net);
+				sctp_timer_start(SCTP_TIMER_TYPE_HEARTBEAT, inp, stcb, net);
 			}
 		}
 	}
@@ -163,7 +163,7 @@ sctp_threshold_management(struct sctp_inpcb *inp, struct sctp_tcb *stcb,
 		/* Abort notification sends a ULP notify */
 		struct mbuf *op_err;
 
-		op_err = sctp_generate_cause(SCTP_CAUSE_PROTOCOL_VIOLATION,
+		op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 		                             "Association error counter exceeded");
 		inp->last_abort_code = SCTP_FROM_SCTP_TIMER + SCTP_LOC_2;
 		sctp_abort_an_association(inp, stcb, op_err, SCTP_SO_NOT_LOCKED);
@@ -403,7 +403,11 @@ sctp_backoff_on_timeout(struct sctp_tcb *stcb,
     int num_marked, int num_abandoned)
 {
 	if (net->RTO == 0) {
-		net->RTO = stcb->asoc.minrto;
+		if (net->RTO_measured) {
+			net->RTO = stcb->asoc.minrto;
+		} else {
+			net->RTO = stcb->asoc.initial_rto;
+		}
 	}
 	net->RTO <<= 1;
 	if (net->RTO > stcb->asoc.maxrto) {
@@ -432,6 +436,11 @@ sctp_recover_sent_list(struct sctp_tcb *stcb)
 				if (asoc->strmout[chk->rec.data.stream_number].chunks_on_queues > 0) {
 					asoc->strmout[chk->rec.data.stream_number].chunks_on_queues--;
 				}
+			}
+			if ((asoc->strmout[chk->rec.data.stream_number].chunks_on_queues == 0) &&
+			    (asoc->strmout[chk->rec.data.stream_number].state == SCTP_STREAM_RESET_PENDING) &&
+			    TAILQ_EMPTY(&asoc->strmout[chk->rec.data.stream_number].outqueue)) {
+				asoc->trigger_reset = 1;
 			}
 			TAILQ_REMOVE(&asoc->sent_queue, chk, sctp_next);
 			if (PR_SCTP_ENABLED(chk->flags)) {
@@ -1052,7 +1061,7 @@ sctp_cookie_timer(struct sctp_inpcb *inp,
 			/* FOOBAR! */
 			struct mbuf *op_err;
 
-			op_err = sctp_generate_cause(SCTP_CAUSE_PROTOCOL_VIOLATION,
+			op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
 			                             "Cookie timer expired, but no cookie");
 			inp->last_abort_code = SCTP_FROM_SCTP_TIMER + SCTP_LOC_3;
 			sctp_abort_an_association(inp, stcb, op_err, SCTP_SO_NOT_LOCKED);
@@ -1513,6 +1522,8 @@ sctp_pathmtu_timer(struct sctp_inpcb *inp,
 #endif
 			if (mtu > next_mtu) {
 				net->mtu = next_mtu;
+			} else {
+				net->mtu = mtu;
 			}
 		}
 	}

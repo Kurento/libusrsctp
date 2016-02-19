@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.c 283664 2015-05-28 18:52:32Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_pcb.c 295670 2016-02-16 20:33:18Z tuexen $");
 #endif
 
 #include <netinet/sctp_os.h>
@@ -2608,7 +2608,6 @@ sctp_findassociation_addr(struct mbuf *m, int offset,
     struct sctphdr *sh, struct sctp_chunkhdr *ch,
     struct sctp_inpcb **inp_p, struct sctp_nets **netp, uint32_t vrf_id)
 {
-	int find_tcp_pool;
 	struct sctp_tcb *stcb;
 	struct sctp_inpcb *inp;
 
@@ -2621,21 +2620,13 @@ sctp_findassociation_addr(struct mbuf *m, int offset,
 		}
 	}
 
-	find_tcp_pool = 0;
-	if ((ch->chunk_type != SCTP_INITIATION) &&
-	    (ch->chunk_type != SCTP_INITIATION_ACK) &&
-	    (ch->chunk_type != SCTP_COOKIE_ACK) &&
-	    (ch->chunk_type != SCTP_COOKIE_ECHO)) {
-		/* Other chunk types go to the tcp pool. */
-		find_tcp_pool = 1;
-	}
 	if (inp_p) {
 		stcb = sctp_findassociation_addr_sa(src, dst, inp_p, netp,
-		                                    find_tcp_pool, vrf_id);
+		                                    1, vrf_id);
 		inp = *inp_p;
 	} else {
 		stcb = sctp_findassociation_addr_sa(src, dst, &inp, netp,
-		                                    find_tcp_pool, vrf_id);
+		                                    1, vrf_id);
 	}
 	SCTPDBG(SCTP_DEBUG_PCB1, "stcb:%p inp:%p\n", (void *)stcb, (void *)inp);
 	if (stcb == NULL && inp) {
@@ -2846,6 +2837,11 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 	inp->reconfig_supported = (uint8_t)SCTP_BASE_SYSCTL(sctp_reconfig_enable);
 	inp->nrsack_supported = (uint8_t)SCTP_BASE_SYSCTL(sctp_nrsack_enable);
 	inp->pktdrop_supported = (uint8_t)SCTP_BASE_SYSCTL(sctp_pktdrop_enable);
+#if defined(__FreeBSD__)
+	inp->fibnum = so->so_fibnum;
+#else
+	inp->fibnum = 0;
+#endif
 #if defined(__Userspace__)
 	inp->ulp_info = NULL;
 	inp->recv_callback = NULL;
@@ -2864,16 +2860,8 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 	}
 #ifdef IPSEC
 #if !(defined(__APPLE__))
-	{
-		struct inpcbpolicy *pcb_sp = NULL;
-
-		error = ipsec_init_policy(so, &pcb_sp);
-		/* Arrange to share the policy */
-		inp->ip_inp.inp.inp_sp = pcb_sp;
-		((struct in6pcb *)(&inp->ip_inp.inp))->in6p_sp = pcb_sp;
-	}
+	error = ipsec_init_policy(so, &inp->ip_inp.inp.inp_sp);
 #else
-	/* not sure what to do for openbsd here */
 	error = 0;
 #endif
 	if (error != 0) {
@@ -2927,6 +2915,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		so->so_pcb = NULL;
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		return (EOPNOTSUPP);
@@ -2949,6 +2940,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		so->so_pcb = NULL;
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		return (ENOBUFS);
@@ -2963,6 +2957,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		SCTP_HASH_FREE(inp->sctp_tcbhash, inp->sctp_hashmark);
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		return (ENOBUFS);
@@ -2984,6 +2981,9 @@ sctp_inpcb_alloc(struct socket *so, uint32_t vrf_id)
 		so->so_pcb = NULL;
 #if defined(__FreeBSD__)
 		crfree(inp->ip_inp.inp.inp_cred);
+#ifdef IPSEC
+		ipsec_delete_pcbpolicy(&inp->ip_inp.inp);
+#endif
 #endif
 		SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_ep), inp);
 		SCTP_UNLOCK_EXC(SCTP_BASE_INFO(sctbinfo).ipi_lock);
@@ -3235,6 +3235,45 @@ sctp_move_pcb_and_assoc(struct sctp_inpcb *old_inp, struct sctp_inpcb *new_inp,
 	SCTP_INP_WUNLOCK(old_inp);
 }
 
+/*
+ * insert an laddr entry with the given ifa for the desired list
+ */
+static int
+sctp_insert_laddr(struct sctpladdr *list, struct sctp_ifa *ifa, uint32_t act)
+{
+	struct sctp_laddr *laddr;
+
+	laddr = SCTP_ZONE_GET(SCTP_BASE_INFO(ipi_zone_laddr), struct sctp_laddr);
+	if (laddr == NULL) {
+		/* out of memory? */
+		SCTP_LTRACE_ERR_RET(NULL, NULL, NULL, SCTP_FROM_SCTP_PCB, EINVAL);
+		return (EINVAL);
+	}
+	SCTP_INCR_LADDR_COUNT();
+	bzero(laddr, sizeof(*laddr));
+	(void)SCTP_GETTIME_TIMEVAL(&laddr->start_time);
+	laddr->ifa = ifa;
+	laddr->action = act;
+	atomic_add_int(&ifa->refcount, 1);
+	/* insert it */
+	LIST_INSERT_HEAD(list, laddr, sctp_nxt_addr);
+
+	return (0);
+}
+
+/*
+ * Remove an laddr entry from the local address list (on an assoc)
+ */
+static void
+sctp_remove_laddr(struct sctp_laddr *laddr)
+{
+
+	/* remove from the list */
+	LIST_REMOVE(laddr, sctp_nxt_addr);
+	sctp_free_ifa(laddr->ifa);
+	SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_laddr), laddr);
+	SCTP_DECR_LADDR_COUNT();
+}
 
 #if !(defined(__FreeBSD__) || defined(__APPLE__) || defined(__Userspace__))
 /*
@@ -4247,13 +4286,9 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate, int from)
 	 * macro here since le_next will get freed as part of the
 	 * sctp_free_assoc() call.
 	 */
-	if (so) {
 #ifdef IPSEC
-		ipsec_delete_pcbpolicy(ip_pcb);
-#endif				/* IPSEC */
-
-		/* Unlocks not needed since the socket is gone now */
-	}
+	ipsec_delete_pcbpolicy(ip_pcb);
+#endif
 #ifndef __Panda__
 	if (ip_pcb->inp_options) {
 		(void)sctp_m_free(ip_pcb->inp_options);
@@ -4655,7 +4690,9 @@ sctp_add_remote_addr(struct sctp_tcb *stcb, struct sockaddr *newaddr,
 	}
 #endif /* SCTP_EMBEDDED_V6_SCOPE */
 #endif
-	SCTP_RTALLOC((sctp_route_t *)&net->ro, stcb->asoc.vrf_id);
+	SCTP_RTALLOC((sctp_route_t *)&net->ro,
+	             stcb->asoc.vrf_id,
+	             stcb->sctp_ep->fibnum);
 
 #if defined(__Userspace__)
 	net->src_addr_selected = 0;
@@ -4890,7 +4927,8 @@ sctp_aloc_a_assoc_id(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
  */
 struct sctp_tcb *
 sctp_aloc_assoc(struct sctp_inpcb *inp, struct sockaddr *firstaddr,
-		int *error, uint32_t override_tag, uint32_t vrf_id,
+                int *error, uint32_t override_tag, uint32_t vrf_id,
+                uint16_t o_streams,
 #if defined(__FreeBSD__) && __FreeBSD_version >= 500000
 		struct thread *p
 #elif defined(__Windows__)
@@ -5086,7 +5124,7 @@ sctp_aloc_assoc(struct sctp_inpcb *inp, struct sockaddr *firstaddr,
 	/* setup back pointer's */
 	stcb->sctp_ep = inp;
 	stcb->sctp_socket = inp->sctp_socket;
-	if ((err = sctp_init_asoc(inp, stcb, override_tag, vrf_id))) {
+	if ((err = sctp_init_asoc(inp, stcb, override_tag, vrf_id, o_streams))) {
 		/* failed */
 		SCTP_TCB_LOCK_DESTROY(stcb);
 		SCTP_TCB_SEND_LOCK_DESTROY(stcb);
@@ -6340,46 +6378,6 @@ sctp_add_local_addr_restricted(struct sctp_tcb *stcb, struct sctp_ifa *ifa)
 }
 
 /*
- * insert an laddr entry with the given ifa for the desired list
- */
-int
-sctp_insert_laddr(struct sctpladdr *list, struct sctp_ifa *ifa, uint32_t act)
-{
-	struct sctp_laddr *laddr;
-
-	laddr = SCTP_ZONE_GET(SCTP_BASE_INFO(ipi_zone_laddr), struct sctp_laddr);
-	if (laddr == NULL) {
-		/* out of memory? */
-		SCTP_LTRACE_ERR_RET(NULL, NULL, NULL, SCTP_FROM_SCTP_PCB, EINVAL);
-		return (EINVAL);
-	}
-	SCTP_INCR_LADDR_COUNT();
-	bzero(laddr, sizeof(*laddr));
-	(void)SCTP_GETTIME_TIMEVAL(&laddr->start_time);
-	laddr->ifa = ifa;
-	laddr->action = act;
-	atomic_add_int(&ifa->refcount, 1);
-	/* insert it */
-	LIST_INSERT_HEAD(list, laddr, sctp_nxt_addr);
-
-	return (0);
-}
-
-/*
- * Remove an laddr entry from the local address list (on an assoc)
- */
-void
-sctp_remove_laddr(struct sctp_laddr *laddr)
-{
-
-	/* remove from the list */
-	LIST_REMOVE(laddr, sctp_nxt_addr);
-	sctp_free_ifa(laddr->ifa);
-	SCTP_ZONE_FREE(SCTP_BASE_INFO(ipi_zone_laddr), laddr);
-	SCTP_DECR_LADDR_COUNT();
-}
-
-/*
  * Remove a local address from the TCB local address restricted list
  */
 void
@@ -6648,6 +6646,14 @@ sctp_pcb_init()
 	}
 	SCTP_BASE_VAR(sctp_pcb_initialized) = 1;
 
+#if defined(SCTP_PROCESS_LEVEL_LOCKS)
+#if !defined(__Userspace_os_Windows)
+	pthread_mutexattr_init(&SCTP_BASE_VAR(mtx_attr));
+#ifdef INVARIANTS
+	pthread_mutexattr_settype(&SCTP_BASE_VAR(mtx_attr), PTHREAD_MUTEX_ERRORCHECK);
+#endif
+#endif
+#endif
 #if defined(SCTP_LOCAL_TRACE_BUF)
 #if defined(__Windows__)
 	if (SCTP_BASE_SYSCTL(sctp_log) != NULL) {
@@ -6860,7 +6866,12 @@ sctp_pcb_finish(void)
 	struct sctp_laddr *wi, *nwi;
 	int i;
 	struct sctp_iterator *it, *nit;
-	
+
+	if (SCTP_BASE_VAR(sctp_pcb_initialized) == 0) {
+		SCTP_PRINTF("%s: race condition on teardown.\n", __func__);
+		return;
+	}
+	SCTP_BASE_VAR(sctp_pcb_initialized) = 0;
 #if !defined(__FreeBSD__)
 	/* Notify the iterator to exit. */
 	SCTP_IPI_ITERATOR_WQ_LOCK();
@@ -6911,6 +6922,7 @@ sctp_pcb_finish(void)
 	DeleteConditionVariable(&sctp_it_ctl.iterator_wakeup);
 #else
 	pthread_cond_destroy(&sctp_it_ctl.iterator_wakeup);
+	pthread_mutexattr_destroy(&SCTP_BASE_VAR(mtx_attr));
 #endif
 #endif
 	/* In FreeBSD the iterator thread never exits
@@ -6918,7 +6930,26 @@ sctp_pcb_finish(void)
 	 * The only way FreeBSD reaches here is if we have VRF's
 	 * but we still add the ifdef to make it compile on old versions.
 	 */
+#if defined(__FreeBSD__)
+retry:
+#endif
 	SCTP_IPI_ITERATOR_WQ_LOCK();
+#if defined(__FreeBSD__)
+	/*
+	 * sctp_iterator_worker() might be working on an it entry without
+	 * holding the lock.  We won't find it on the list either and
+	 * continue and free/destroy it.  While holding the lock, spin, to
+	 * avoid the race condition as sctp_iterator_worker() will have to
+	 * wait to re-aquire the lock.
+	 */
+	if (sctp_it_ctl.iterator_running != 0 || sctp_it_ctl.cur_it != NULL) {
+		SCTP_IPI_ITERATOR_WQ_UNLOCK();
+		SCTP_PRINTF("%s: Iterator running while we held the lock. Retry. "
+		            "cur_it=%p\n", __func__, sctp_it_ctl.cur_it);
+		DELAY(10);
+		goto retry;
+	}
+#endif
 	TAILQ_FOREACH_SAFE(it, &sctp_it_ctl.iteratorhead, sctp_nxt_itr, nit) {
 #if defined(__FreeBSD__) && __FreeBSD_version >= 801000
 		if (it->vn != curvnet) {
@@ -6944,7 +6975,7 @@ sctp_pcb_finish(void)
 	SCTP_IPI_ITERATOR_WQ_DESTROY();
 	SCTP_ITERATOR_LOCK_DESTROY();
 #endif
-	SCTP_OS_TIMER_STOP(&SCTP_BASE_INFO(addr_wq_timer.timer));
+	SCTP_OS_TIMER_STOP_DRAIN(&SCTP_BASE_INFO(addr_wq_timer.timer));
 	SCTP_WQ_ADDR_LOCK();
 	LIST_FOREACH_SAFE(wi, &SCTP_BASE_INFO(addr_wq), sctp_nxt_addr, nwi) {
 		LIST_REMOVE(wi, sctp_nxt_addr);
@@ -7039,6 +7070,14 @@ sctp_pcb_finish(void)
 	SCTP_ZONE_DESTROY(zone_clust);
 	SCTP_ZONE_DESTROY(zone_ext_refcnt);
 #endif
+	/* Get rid of other stuff too. */
+	if (SCTP_BASE_INFO(sctp_asochash) != NULL)
+		SCTP_HASH_FREE(SCTP_BASE_INFO(sctp_asochash), SCTP_BASE_INFO(hashasocmark));
+	if (SCTP_BASE_INFO(sctp_ephash) != NULL)
+		SCTP_HASH_FREE(SCTP_BASE_INFO(sctp_ephash), SCTP_BASE_INFO(hashmark));
+	if (SCTP_BASE_INFO(sctp_tcpephash) != NULL)
+		SCTP_HASH_FREE(SCTP_BASE_INFO(sctp_tcpephash), SCTP_BASE_INFO(hashtcpmark));
+
 #if defined(__Windows__) || defined(__FreeBSD__) || defined(__Userspace__)
 	SCTP_ZONE_DESTROY(SCTP_BASE_INFO(ipi_zone_ep));
 	SCTP_ZONE_DESTROY(SCTP_BASE_INFO(ipi_zone_asoc));
@@ -7050,13 +7089,6 @@ sctp_pcb_finish(void)
 	SCTP_ZONE_DESTROY(SCTP_BASE_INFO(ipi_zone_asconf));
 	SCTP_ZONE_DESTROY(SCTP_BASE_INFO(ipi_zone_asconf_ack));
 #endif
-	/* Get rid of other stuff to */
-	if (SCTP_BASE_INFO(sctp_asochash) != NULL)
-		SCTP_HASH_FREE(SCTP_BASE_INFO(sctp_asochash), SCTP_BASE_INFO(hashasocmark));
-	if (SCTP_BASE_INFO(sctp_ephash) != NULL)
-		SCTP_HASH_FREE(SCTP_BASE_INFO(sctp_ephash), SCTP_BASE_INFO(hashmark));
-	if (SCTP_BASE_INFO(sctp_tcpephash) != NULL)
-		SCTP_HASH_FREE(SCTP_BASE_INFO(sctp_tcpephash), SCTP_BASE_INFO(hashtcpmark));
 #if defined(__FreeBSD__) && defined(SMP) && defined(SCTP_USE_PERCPU_STAT)
 	SCTP_FREE(SCTP_BASE_STATS, SCTP_M_MCORE);
 #endif
@@ -7280,9 +7312,17 @@ sctp_load_addresses_from_init(struct sctp_tcb *stcb, struct mbuf *m,
 					 */
 					if (stcb_tmp) {
 						if (SCTP_GET_STATE(&stcb_tmp->asoc) & SCTP_STATE_COOKIE_WAIT) {
+							struct mbuf *op_err;
+							char msg[SCTP_DIAG_INFO_LEN];
+
 							/* in setup state we abort this guy */
+							snprintf(msg, sizeof(msg),
+							         "%s:%d at %s", __FILE__, __LINE__, __func__);
+							op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
+							         msg);
 							sctp_abort_an_association(stcb_tmp->sctp_ep,
-										  stcb_tmp, NULL, SCTP_SO_NOT_LOCKED);
+										  stcb_tmp, op_err,
+							                          SCTP_SO_NOT_LOCKED);
 							goto add_it_now;
 						}
 						SCTP_TCB_UNLOCK(stcb_tmp);
@@ -7364,15 +7404,23 @@ sctp_load_addresses_from_init(struct sctp_tcb *stcb, struct mbuf *m,
 					 * strange, address is in another
 					 * assoc? straighten out locks.
 					 */
-					if (stcb_tmp)
+					if (stcb_tmp) {
 						if (SCTP_GET_STATE(&stcb_tmp->asoc) & SCTP_STATE_COOKIE_WAIT) {
+							struct mbuf *op_err;
+							char msg[SCTP_DIAG_INFO_LEN];
+
 							/* in setup state we abort this guy */
+							snprintf(msg, sizeof(msg),
+							         "%s:%d at %s", __FILE__, __LINE__, __func__);
+							op_err = sctp_generate_cause(SCTP_BASE_SYSCTL(sctp_diag_info_code),
+							         msg);
 							sctp_abort_an_association(stcb_tmp->sctp_ep,
-										  stcb_tmp, NULL, SCTP_SO_NOT_LOCKED);
+										  stcb_tmp, op_err,
+							                          SCTP_SO_NOT_LOCKED);
 							goto add_it_now6;
 						}
-					SCTP_TCB_UNLOCK(stcb_tmp);
-
+						SCTP_TCB_UNLOCK(stcb_tmp);
+					}
 					if (stcb->asoc.state == 0) {
 						/* the assoc was freed? */
 						return (-21);
@@ -8018,6 +8066,11 @@ sctp_initiate_iterator(inp_func inpf,
 	if (af == NULL) {
 		return (-1);
 	}
+	if (SCTP_BASE_VAR(sctp_pcb_initialized) == 0) {
+		SCTP_PRINTF("%s: abort on initialize being %d\n", __func__,
+		            SCTP_BASE_VAR(sctp_pcb_initialized));
+		return (-1);
+	}
 	SCTP_MALLOC(it, struct sctp_iterator *, sizeof(struct sctp_iterator),
 		    SCTP_M_ITER);
 	if (it == NULL) {
@@ -8058,7 +8111,13 @@ sctp_initiate_iterator(inp_func inpf,
 
 	}
 	SCTP_IPI_ITERATOR_WQ_LOCK();
-
+	if (SCTP_BASE_VAR(sctp_pcb_initialized) == 0) {
+		SCTP_IPI_ITERATOR_WQ_UNLOCK();
+		SCTP_PRINTF("%s: rollback on initialize being %d it=%p\n", __func__,
+		            SCTP_BASE_VAR(sctp_pcb_initialized), it);
+		SCTP_FREE(it, SCTP_M_ITER);
+		return (-1);
+	}
 	TAILQ_INSERT_TAIL(&sctp_it_ctl.iteratorhead, it, sctp_nxt_itr);
 	if (sctp_it_ctl.iterator_running == 0) {
 		sctp_wakeup_iterator();

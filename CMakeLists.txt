@@ -1,5 +1,6 @@
 #
-# Copyright (C) 2011-2012 Michael Tuexen
+# Copyright (C) 2015-2015 Oleg Alexeenkov
+# Copyright (C) 2015-2015 Felix Weinrank
 #
 # All rights reserved.
 #
@@ -18,7 +19,7 @@
 # THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
 # ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
 # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED.	IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
 # FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
 # DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
 # OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -28,30 +29,7 @@
 # SUCH DAMAGE.
 #
 
-AM_CPPFLAGS = -I$(srcdir)/../usrsctplib
-EXTRA_DIST = Makefile.nmake tsctp.c daytime_server.c discard_server.c echo_server.c client.c rtcweb.c ekr_client.c ekr_server.c ekr_loop.c test_libmgmt.c
-
-noinst_PROGRAMS = tsctp daytime_server discard_server echo_server client rtcweb ekr_client ekr_server ekr_peer ekr_loop test_libmgmt
-test_libmgmt_SOURCES = test_libmgmt.c
-test_libmgmt_LDADD = ../usrsctplib/libusrsctp.la
-tsctp_SOURCES = tsctp.c
-tsctp_LDADD = ../usrsctplib/libusrsctp.la
-daytime_server_SOURCES = daytime_server.c
-daytime_server_LDADD = ../usrsctplib/libusrsctp.la
-discard_server_SOURCES = discard_server.c
-discard_server_LDADD = ../usrsctplib/libusrsctp.la
-echo_server_SOURCES = echo_server.c
-echo_server_LDADD = ../usrsctplib/libusrsctp.la
-client_SOURCES = client.c
-client_LDADD = ../usrsctplib/libusrsctp.la
-rtcweb_SOURCES = rtcweb.c
-rtcweb_LDADD = ../usrsctplib/libusrsctp.la
-ekr_server_SOURCES = ekr_server.c
-ekr_server_LDADD = ../usrsctplib/libusrsctp.la
-ekr_client_SOURCES = ekr_client.c
-ekr_client_LDADD = ../usrsctplib/libusrsctp.la
-ekr_peer_SOURCES = ekr_peer.c
-ekr_peer_LDADD = ../usrsctplib/libusrsctp.la
-ekr_loop_SOURCES = ekr_loop.c
-ekr_loop_LDADD = ../usrsctplib/libusrsctp.la
-
+cmake_minimum_required(VERSION 2.6)
+message(">> WARNINING: CMAKE SUPPORT IS EXPERIMENTAL <<")
+add_subdirectory(usrsctplib)
+add_subdirectory(programs)

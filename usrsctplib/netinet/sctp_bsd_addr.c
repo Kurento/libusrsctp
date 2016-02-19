@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_bsd_addr.c 276914 2015-01-10 20:49:57Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_bsd_addr.c 295670 2016-02-16 20:33:18Z tuexen $");
 #endif
 
 #include <netinet/sctp_os.h>
@@ -124,6 +124,9 @@ static void
 #endif
 sctp_iterator_thread(void *v SCTP_UNUSED)
 {
+#if defined(__Userspace__)
+	sctp_userspace_set_threadname("SCTP iterator");
+#endif
 	SCTP_IPI_ITERATOR_WQ_LOCK();
 	/* In FreeBSD this thread never terminates. */
 #if defined(__FreeBSD__)
@@ -196,11 +199,7 @@ sctp_startup_iterator(void)
 #elif defined(__APPLE__)
 	kernel_thread_start((thread_continue_t)sctp_iterator_thread, NULL, &sctp_it_ctl.thread_proc);
 #elif defined(__Userspace__)
-#if defined(__Userspace_os_Windows)
-	if ((sctp_it_ctl.thread_proc = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)&sctp_iterator_thread, NULL, 0, NULL)) == NULL) {
-#else
-	if (pthread_create(&sctp_it_ctl.thread_proc, NULL, &sctp_iterator_thread, NULL)) {
-#endif
+	if (sctp_userspace_thread_create(&sctp_it_ctl.thread_proc, &sctp_iterator_thread)) {
 		SCTP_PRINTF("ERROR: Creating sctp_iterator_thread failed.\n");
 	}
 #endif
@@ -345,6 +344,7 @@ sctp_init_ifns_for_vrf(int vrfid)
 	/* Get actual adapter information */
 	if ((Err = GetAdaptersAddresses(AF_INET, 0, NULL, pAdapterAddrs, &AdapterAddrsSize)) != ERROR_SUCCESS) {
 		SCTP_PRINTF("GetAdaptersV4Addresses() failed with error code %d\n", Err);
+		FREE(pAdapterAddrs);
 		return;
 	}
 	/* Enumerate through each returned adapter and save its information */
@@ -375,8 +375,7 @@ sctp_init_ifns_for_vrf(int vrfid)
 			}
 		}
 	}
-	if (pAdapterAddrs)
-		FREE(pAdapterAddrs);
+	FREE(pAdapterAddrs);
 #endif
 #ifdef INET6
 	AdapterAddrsSize = 0;
@@ -396,6 +395,7 @@ sctp_init_ifns_for_vrf(int vrfid)
 	/* Get actual adapter information */
 	if ((Err = GetAdaptersAddresses(AF_INET6, 0, NULL, pAdapterAddrs, &AdapterAddrsSize)) != ERROR_SUCCESS) {
 		SCTP_PRINTF("GetAdaptersV6Addresses() failed with error code %d\n", Err);
+		FREE(pAdapterAddrs);
 		return;
 	}
 	/* Enumerate through each returned adapter and save its information */
@@ -422,8 +422,7 @@ sctp_init_ifns_for_vrf(int vrfid)
 			}
 		}
 	}
-	if (pAdapterAddrs)
-		FREE(pAdapterAddrs);
+	FREE(pAdapterAddrs);
 #endif
 }
 #elif defined(__Userspace__)
@@ -683,6 +682,10 @@ sctp_addr_change(struct ifaddr *ifa, int cmd)
         return;
 #else
 	uint32_t ifa_flags = 0;
+
+	if (SCTP_BASE_VAR(sctp_pcb_initialized) == 0) {
+		return;
+	}
 	/* BSD only has one VRF, if this changes
 	 * we will need to hook in the right
 	 * things here to get the id to pass to

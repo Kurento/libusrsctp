@@ -32,7 +32,7 @@
 
 #ifdef __FreeBSD__
 #include <sys/cdefs.h>
-__FBSDID("$FreeBSD: head/sys/netinet/sctp_asconf.c 283662 2015-05-28 18:34:02Z tuexen $");
+__FBSDID("$FreeBSD: head/sys/netinet/sctp_asconf.c 295670 2016-02-16 20:33:18Z tuexen $");
 #endif
 
 #include <netinet/sctp_os.h>
@@ -1116,7 +1116,8 @@ sctp_path_check_and_react(struct sctp_tcb *stcb, struct sctp_ifa *newifa)
 		   nexthop, the path will not be changed.
 		 */
 		SCTP_RTALLOC((sctp_route_t *)&net->ro,
-			     stcb->sctp_ep->def_vrf_id);
+			     stcb->sctp_ep->def_vrf_id,
+			     stcb->sctp_ep->fibnum);
 		if (net->ro.ro_rt == NULL)
 			continue;
 
@@ -1336,6 +1337,7 @@ sctp_asconf_queue_add(struct sctp_tcb *stcb, struct sctp_ifa *ifa,
 {
 	uint32_t status;
 	int pending_delete_queued = 0;
+	int last;
 
 	/* see if peer supports ASCONF */
 	if (stcb->asoc.asconf_supported == 0) {
@@ -1346,15 +1348,21 @@ sctp_asconf_queue_add(struct sctp_tcb *stcb, struct sctp_ifa *ifa,
 	 * if this is deleting the last address from the assoc, mark it as
 	 * pending.
 	 */
-	if ((type == SCTP_DEL_IP_ADDRESS) && !stcb->asoc.asconf_del_pending &&
-	    (sctp_local_addr_count(stcb) < 2)) {
-		/* set the pending delete info only */
-		stcb->asoc.asconf_del_pending = 1;
-		stcb->asoc.asconf_addr_del_pending = ifa;
-		atomic_add_int(&ifa->refcount, 1);
-		SCTPDBG(SCTP_DEBUG_ASCONF2,
-			"asconf_queue_add: mark delete last address pending\n");
-		return (-1);
+	if ((type == SCTP_DEL_IP_ADDRESS) && !stcb->asoc.asconf_del_pending) {
+		if (stcb->sctp_ep->sctp_flags & SCTP_PCB_FLAGS_BOUNDALL) {
+			last = (sctp_local_addr_count(stcb) == 0);
+		} else {
+			last = (sctp_local_addr_count(stcb) == 1);
+		}
+		if (last) {
+			/* set the pending delete info only */
+			stcb->asoc.asconf_del_pending = 1;
+			stcb->asoc.asconf_addr_del_pending = ifa;
+			atomic_add_int(&ifa->refcount, 1);
+			SCTPDBG(SCTP_DEBUG_ASCONF2,
+				"asconf_queue_add: mark delete last address pending\n");
+			return (-1);
+		}
 	}
 
 	/* queue an asconf parameter */
@@ -1682,8 +1690,14 @@ sctp_handle_asconf_ack(struct mbuf *m, int offset,
 	 * abort the asoc, since someone probably just hijacked us...
 	 */
 	if (serial_num == (asoc->asconf_seq_out + 1)) {
+		struct mbuf *op_err;
+		char msg[SCTP_DIAG_INFO_LEN];
+
 		SCTPDBG(SCTP_DEBUG_ASCONF1, "handle_asconf_ack: got unexpected next serial number! Aborting asoc!\n");
-		sctp_abort_an_association(stcb->sctp_ep, stcb, NULL, SCTP_SO_NOT_LOCKED);
+		snprintf(msg, sizeof(msg), "Never sent serial number %8.8x",
+			 serial_num);
+		op_err = sctp_generate_cause(SCTP_CAUSE_PROTOCOL_VIOLATION, msg);
+		sctp_abort_an_association(stcb->sctp_ep, stcb, op_err, SCTP_SO_NOT_LOCKED);
 		*abort_no_unlock = 1;
 		return;
 	}
@@ -3256,6 +3270,7 @@ sctp_addr_mgmt_ep_sa(struct sctp_inpcb *inp, struct sockaddr *sa,
 		} else {
 			struct sctp_asconf_iterator *asc;
 			struct sctp_laddr *wi;
+			int ret;
 
 			SCTP_MALLOC(asc, struct sctp_asconf_iterator *,
 			            sizeof(struct sctp_asconf_iterator),
@@ -3277,7 +3292,7 @@ sctp_addr_mgmt_ep_sa(struct sctp_inpcb *inp, struct sockaddr *sa,
 			wi->action = type;
 			atomic_add_int(&ifa->refcount, 1);
 			LIST_INSERT_HEAD(&asc->list_of_work, wi, sctp_nxt_addr);
-			(void)sctp_initiate_iterator(sctp_asconf_iterator_ep,
+			ret = sctp_initiate_iterator(sctp_asconf_iterator_ep,
 			                             sctp_asconf_iterator_stcb,
 			                             sctp_asconf_iterator_ep_end,
 			                             SCTP_PCB_ANY_FLAGS,
@@ -3285,6 +3300,12 @@ sctp_addr_mgmt_ep_sa(struct sctp_inpcb *inp, struct sockaddr *sa,
 			                             SCTP_ASOC_ANY_STATE,
 			                             (void *)asc, 0,
 			                             sctp_asconf_iterator_end, inp, 0);
+			if (ret) {
+				SCTP_PRINTF("Failed to initiate iterator for addr_mgmt_ep_sa\n");
+				SCTP_LTRACE_ERR_RET(inp, NULL, NULL, SCTP_FROM_SCTP_ASCONF, EFAULT);
+				                    sctp_asconf_iterator_end(asc, 0);
+				return (EFAULT);
+			}
 		}
 		return (0);
 	} else {
