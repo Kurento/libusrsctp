@@ -31,5 +31,6 @@
 
 cmake_minimum_required(VERSION 2.6)
 message(">> WARNINING: CMAKE SUPPORT IS EXPERIMENTAL <<")
+set (PROJECT_VERSION 0.9.2.1)
 add_subdirectory(usrsctplib)
 add_subdirectory(programs)
