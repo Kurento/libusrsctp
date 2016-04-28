@@ -4,7 +4,8 @@ Priority: optional
 Maintainer: Kurento Maintenance Team <kurento@googlegroups.com>
 Build-Depends: debhelper (>= 8.0.0),
  autoconf,
- libtool
+ libtool,
+ cmake
 Standards-Version: 3.9.4
 
 Package: libusrsctp
