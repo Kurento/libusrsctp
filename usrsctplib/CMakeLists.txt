@@ -32,7 +32,6 @@
 cmake_minimum_required(VERSION 2.6)
 message(">> WARNINING: CMAKE SUPPORT IS EXPERIMENTAL <<")
 
-project(usrsctplib)
 
 #################################################
 # INCLUDE MODULES
