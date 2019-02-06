@@ -1,3 +1,21 @@
+libusrsctp (0.9.2-1kurento1) UNRELEASED; urgency=medium
+
+  [ Jose Antonio Santos Cadenas ]
+  * debian/control: Remove extra comma
+
+  [ Santiago Carot-Nemesio ]
+  * Use usrsctp from sctplab
+
+  [ Jose Antonio Santos Cadenas ]
+  * debian/control: Add cmake dependency
+
+  [ Juan Navarro ]
+  * Fix build: Add Automake, fix CMake error
+  * debian/rules: Add bootstrap command
+  * debian/rules: Enable Debian hardening
+
+ -- Juan Navarro <juan.navarro@gmx.es>  Wed, 06 Feb 2019 12:43:07 +0100
+
 libusrsctp (0.0.1~rc1) testing; urgency=medium
 
   * Initial release.
