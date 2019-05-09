@@ -1,0 +1,76 @@
+External repositories
+=====================
+
+- Upstream: https://github.com/sctplab/usrsctp
+- Debian/Ubuntu package: https://salsa.debian.org/pkg-voip-team/libusrsctp
+
+
+
+Debianization commands (initial)
+================================
+
+These are the commands that were run to initialize the debianization of this Kurento repository.
+Source docs: 2_FORK_UPDATE
+
+Date of initial merge: 2019-05-09
+
+git remote add -t master upstream_remote https://github.com/sctplab/usrsctp.git
+git fetch --prune --tags upstream_remote master
+git checkout master
+git checkout -b tmp upstream_remote/master
+GIT_REF="$(git rev-parse --short upstream_remote/master)"
+git merge --allow-unrelated-histories \
+    -s ours \
+    -m "Sync sources with upstream commit '$GIT_REF'" \
+    -m "Upstream repo: $(git ls-remote --get-url upstream_remote)" \
+    master
+git checkout master
+git merge tmp
+git branch -D tmp
+git push
+
+TEMP="$(mktemp --directory)"
+git clone https://salsa.debian.org/pkg-voip-team/libusrsctp.git "$TEMP"
+pushd "$TEMP"
+    GIT_REF="$(git rev-parse --short origin)"
+    git checkout --quiet "$GIT_REF"
+popd
+meld "$TEMP/debian" ./debian  # Carefully import all changes from left to right
+git status
+git add debian/
+git commit \
+    -m "Sync debian/ with packager commit '$GIT_REF'" \
+    -m "Packager repo: https://salsa.debian.org/telepathy-team/libnice.git"
+git push
+
+
+
+Debianization commands (update)
+===============================
+
+These are the last commands that were run to bring the debianization of this Kurento repository in sync with latest upstream changes.
+Source docs: 2_FORK_UPDATE, doc-kurento/source/dev/release.rst
+
+Date of last update: 2019-05-09
+
+NEW_VERSION="0.9.3.0+20190509"
+NEW_DEBIAN="0kurento1"
+PACKAGE_VERSION="${NEW_VERSION}-${NEW_DEBIAN}"
+COMMIT_MSG="Bump development version to $PACKAGE_VERSION"
+gbp dch \
+      --ignore-branch \
+      --git-author \
+      --spawn-editor=never \
+      --new-version="$PACKAGE_VERSION" \
+      ./debian/
+git add debian/changelog
+git commit -m "$COMMIT_MSG"
+git push
+
+
+
+Kurento changes from Debian/Ubuntu package
+==========================================
+
+- Build from latest upstream master.
+- Set new version in 'debian/changelog'.
