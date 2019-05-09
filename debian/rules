@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+# Let d-shlibs calculate development package dependencies
+#  and handle shared library install
+override_dh_install:
+	dh_install
+	d-shlibmove --commit \
+		--devunversioned \
+		--exclude-la \
+		--multiarch \
+		--movedev "debian/tmp/usr/include/*" usr/include/ \
+		debian/tmp/usr/lib/*/*.so
+
+%:
+	dh $@ --with autoreconf,pkgkde_symbolshelper --parallel

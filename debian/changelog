@@ -1,0 +1,16 @@
+libusrsctp (0.9.3.0+20190127-2) unstable; urgency=medium
+
+  * Fix Homepage URL.
+    Closes: Bug#921711. Thanks to Michael Becker.
+  * Update watch file:
+    + Rewrite usage comment.
+    + Simplify regular expressions.
+
+ -- Jonas Smedegaard <dr@jones.dk>  Mon, 18 Feb 2019 19:52:07 +0100
+
+libusrsctp (0.9.3.0+20190127-1) unstable; urgency=medium
+
+  * Initial packaging release.
+    Closes: Bug#864759.
+
+ -- Jonas Smedegaard <dr@jones.dk>  Sat, 02 Feb 2019 15:09:30 +0100
