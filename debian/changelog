@@ -1,3 +1,9 @@
+libusrsctp (0.9.3.0+20190509-0kurento1) UNRELEASED; urgency=medium
+
+  * debian: Changes for initial Kurento debianization
+
+ -- Juan Navarro <juan.navarro@gmx.es>  Thu, 09 May 2019 14:27:57 -0400
+
 libusrsctp (0.9.3.0+20190127-2) unstable; urgency=medium
 
   * Fix Homepage URL.
